@@ -39,12 +39,11 @@ Key methods include:
 
 ###  Run Locally (RStudio)
 
-1. **Clone this repo**
+1. Clone this repo.
    ```
    git clone https://github.com/albarreras/service_requests_analysis.git
-   cd service_requests_analysis
 
-2. Open RStudio
+2. Open RStudio and set working directory to cloned project folder.
    
 4. Run qmd file with CTRL + ALT + R to have the entire markdown file process or individually run each code chunk.
 
