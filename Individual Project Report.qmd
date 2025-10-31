@@ -1,0 +1,1258 @@
+---
+title: "STA9750 Individidual Project Report"
+author: Astrid Barreras
+format:
+  html:
+    toc: true
+    number-sections: true
+    colorlinks: true
+---
+
+## Overarching Question
+
+How do 311 service request volume, response times, and resolution rates between 2019-2024 vary across NYC boroughs, and to what extent can variations be explained by differences in socioeconomic status and funding allocations?
+
+## Specific Question #4
+
+What effect do SES indicators and budgets have on 311 service requests volume, response times, and resolution rates?
+
+## Loading Libraries
+
+```{r}
+#for data manipulation needed (mutate, filter, summarise, arrange)
+library(dplyr)
+
+#for tidying up dfs (pivot_wider for SES indicators df)
+library(tidyr)
+
+#for working with the large 311 service requests df
+library(readr)
+
+#for cleaning column names throughout dfs for easy standardization 
+library(janitor)
+
+#for creating an agency map for aligning agencies frrom budget to 311 service requests
+library(tibble)
+
+#for converting to POSIXct created date and closed date columns 
+library(lubridate)
+
+#for fetching ACS5 data 
+library(tidycensus)
+
+#for running GAM model
+library(mgcv)
+
+#for generating visualizations 
+library(ggplot2)
+
+#for adding interactivity to visualizations
+library(plotly)
+
+#for plotting correlations
+library(corrplot)
+```
+
+## Data Acquisition & Processing
+
+### NYC 311 Service Requests
+
+#### [**Source**](https://data.cityofnewyork.us/Social-Services/311-Service-Requests-from-2010-to-Present/erm2-nwe9/explore/query/SELECT%0A%20%20%60unique_key%60%2C%0A%20%20%60created_date%60%2C%0A%20%20%60closed_date%60%2C%0A%20%20%60agency%60%2C%0A%20%20%60agency_name%60%2C%0A%20%20%60complaint_type%60%2C%0A%20%20%60descriptor%60%2C%0A%20%20%60location_type%60%2C%0A%20%20%60incident_zip%60%2C%0A%20%20%60incident_address%60%2C%0A%20%20%60street_name%60%2C%0A%20%20%60cross_street_1%60%2C%0A%20%20%60cross_street_2%60%2C%0A%20%20%60intersection_street_1%60%2C%0A%20%20%60intersection_street_2%60%2C%0A%20%20%60address_type%60%2C%0A%20%20%60city%60%2C%0A%20%20%60landmark%60%2C%0A%20%20%60facility_type%60%2C%0A%20%20%60status%60%2C%0A%20%20%60due_date%60%2C%0A%20%20%60resolution_description%60%2C%0A%20%20%60resolution_action_updated_date%60%2C%0A%20%20%60community_board%60%2C%0A%20%20%60bbl%60%2C%0A%20%20%60borough%60%2C%0A%20%20%60x_coordinate_state_plane%60%2C%0A%20%20%60y_coordinate_state_plane%60%2C%0A%20%20%60open_data_channel_type%60%2C%0A%20%20%60park_facility_name%60%2C%0A%20%20%60park_borough%60%2C%0A%20%20%60vehicle_type%60%2C%0A%20%20%60taxi_company_borough%60%2C%0A%20%20%60taxi_pick_up_location%60%2C%0A%20%20%60bridge_highway_name%60%2C%0A%20%20%60bridge_highway_direction%60%2C%0A%20%20%60road_ramp%60%2C%0A%20%20%60bridge_highway_segment%60%2C%0A%20%20%60latitude%60%2C%0A%20%20%60longitude%60%2C%0A%20%20%60location%60%0AWHERE%0A%20%20%60created_date%60%0A%20%20%20%20BETWEEN%20%222019-01-01T00%3A00%3A00%22%20%3A%3A%20floating_timestamp%0A%20%20%20%20AND%20%222024-12-31T23%3A59%3A00%22%20%3A%3A%20floating_timestamp%0AORDER%20BY%20%60created_date%60%20ASC%20NULL%20LAST/page/filter)
+
+This data was extracted from NYC Open Data as provided by 311. The full data available for extraction encompasses 2010-Present (September 21, 2025) across all NYC government agencies (145 agencies). Explore the [data dictionary](https://data.cityofnewyork.us/api/views/erm2-nwe9/files/b372b884-f86a-453b-ba16-1fe06ce9d212?download=true&filename=311_ServiceRequest_2010-Present_DataDictionary_Updated_2023.xlsx) to learn more.
+
+This data was extracted as a CSV file using the "Query data" function, filtered by `Created Date` is between `2019 Jan 01 12:00:00 AM` AND `2024 Dec 31 11:59:59 PM`. Original file size was 10.13GB, with \~18.6M rows and 41 columns. The read in file size using `readr` dropped to 1.9GB with \~18.6M rows and 7 columns, which was much more manageable for memory.
+
+```{r}
+#using read_csv function from readr as it handles reading large datasets efficiently and quickly 
+ser_reqs <- read_csv("data/raw/service_requests_2019_2024.csv",
+                     col_select = c("Unique Key", "Created Date",
+                                    "Closed Date", "Agency",
+                                    "Agency Name", "Borough",
+                                    "Status"))
+
+```
+
+#### Data Cleaning
+
+Checking the structure of the data highlights the need to convert `Created Date` and `Closed Date` from `character` type to `POSIXct` type as this will make it easier to calculate response time as the difference in time between `Created Date` and `Closed Date`. For standardization, the column names ought to be cleaned.
+
+```{r}
+#checking structure of data 
+str(ser_reqs)
+```
+
+Checking the missing values highlights the need to remove rows with missing values in columns `Closed Date` and `Borough`.
+
+```{r}
+#checking missing values
+colSums(is.na(ser_reqs))
+```
+
+Checking the unique values highlights the need to filter for `Status == Closed` to calculate resolution rate.
+
+```{r}
+#checking unique values in status to know what value to filter for to compute resolution rate
+unique(ser_reqs$Status)
+```
+
+Checking the missing values highlights the need to filter for `borough %in% c("BRONX", "BROOKLYN", "MANHATTAN", "QUEENS", "STATEN ISLAND")` .
+
+```{r}
+#checking unique values in Borough column
+unique(ser_reqs$Borough)
+```
+
+Leveraging these insights, 311 service requests data can be cleaned.
+
+```{r}
+#cleaning 311 service requests
+ser_reqs_cl <- ser_reqs %>%
+  
+  #standardizing column names
+  clean_names() %>%
+  
+  #converting created and closed dates to POSIXct
+  mutate(created_date = mdy_hms(created_date),
+         closed_date = mdy_hms(closed_date),
+    
+         #extracing the year from created date
+         year = year(created_date)) %>%
+  
+  #filtering for non-missing values
+  filter(!is.na(closed_date), !is.na(borough),
+         
+         #filtering for necessary boroughs
+         borough %in% c("BRONX", "BROOKLYN", 
+                        "MANHATTAN", "QUEENS", "STATEN ISLAND")) 
+  
+```
+
+Rechecking the structure shows `Created Date` and `Closed Date` were converted from `character` type to `POSIXct` type.
+
+```{r}
+#checking the structure of the data
+str(ser_reqs_cl)
+```
+
+Rechecking for missing values shows rows with missing values were removed.
+
+```{r}
+#checking for missing columns 
+colSums(is.na(ser_reqs_cl))
+```
+
+Rechecking unique values of `borough` shows only necessary borough information was retained.
+
+```{r}
+#checking unique values in borough column
+unique(ser_reqs_cl$borough)
+```
+
+When previously calculating mean response times, extreme values (\>365 days) and negative values (\< 0 days) was encountered at the borough x agency x year level.
+
+Checking prior to calculating outcomes, the proportion of negative and extreme values against the total volume of service requests.
+
+```{r}
+#checking service requests with less than 0 days to close
+neg_vals <- ser_reqs_cl %>%
+  
+  
+  #calculating days to close
+  #converting the difference between closed and created date to numeric
+  #using the POSIXct function difftime to handle the calc, unit being days
+  mutate(days_to_close = as.numeric(difftime(closed_date, 
+                                             created_date,
+                                             units="days"))) %>%
+  #filtering for less than 0 days to close
+  filter(days_to_close < 0)
+
+
+#calcuulating prop of neg_vals in relation to total volume of reqs
+nrow(neg_vals) / nrow(ser_reqs_cl)
+```
+
+```{r}
+#checking service requests with greater than 365 days to close
+ext_vals <- ser_reqs_cl %>%
+  
+  #calculating days to close 
+  #converting the difference between closed and created date to numeric
+  #using the POSIXct function difftime to handle the calc, unit being days
+  mutate(days_to_close = as.numeric(difftime(closed_date, 
+                                             created_date, 
+                                             units="days"))) %>%
+  
+  #filtering for greater than 365 days to close
+  filter(days_to_close > 365)
+
+#calculating prop of ext_vals in relation to total volume of reqs
+nrow(ext_vals) / nrow(ser_reqs_cl)
+```
+
+Given that these extreme and negative days to close are merely a marginal fraction of the overall volume of service requests (\~1.86%), they will be removed as they are potentially related to data entry issues.
+
+```{r}
+#filtering for non outliers
+ser_reqs_ro <- ser_reqs_cl %>%
+  
+  #calculating days to close 
+  mutate(days_to_close = as.numeric(difftime(closed_date, 
+                                             created_date, 
+                                             units="days"))) %>%
+  
+  #filtering for closure days within 0-365 days
+  filter(days_to_close >= 0, days_to_close <= 365)
+
+```
+
+Rechecking outliers to see if removal process was successful.
+
+```{r}
+#filtering for days to close greater than 365 days
+ser_reqs_ro %>%
+  filter(days_to_close > 365)
+```
+
+```{r}
+#filtering for days to close less than 0 days
+ser_reqs_ro %>%
+  filter(days_to_close < 0 )
+```
+
+Checking the unique values in agencies in case any changes after removal of outliers.
+
+```{r}
+#checking the distinct values of agency names
+unique(ser_reqs_ro$agency)
+```
+
+Out of the 18 agencies above, only 15 agencies were identified in the NYC Agency budgets. Three agencies service requests will be removed (EDC, OSE & OTI).
+
+```{r}
+ser_reqs_ar <- ser_reqs_ro %>%
+  #filter for agencies with budgets
+  filter(agency %in% c("DOHMH", "HPD", "NYPD", "TLC", "DOT", "DEP", 
+                       "DSNY", "DOB", "DPR", "DHS", "DOF", "DCWP",
+                       "DFTA", "DOITT", "DOE"))
+```
+
+```{r}
+ser_reqs_ar %>%
+  #check to see if agencies with missing budgets were filtered out
+  filter(agency %in% c("OTI", "OSE", "EDC"))
+```
+
+```{r}
+#checking the distinct values of agency names
+unique(ser_reqs_ar$agency)
+```
+
+```{r}
+#checking the count of agencies left
+length(unique(ser_reqs_ar$agency))
+```
+
+Calculation of volume, response times, and resolution rates was performed at the `borough` x `year` level. Volume was calculated by taking the sum of all the service requests. Average response times were calculated using the difference between `closed_date` and `created_date` (previously done above) and then finding the mean (performed below). Resolution rates were calculated using the proportion of closed service requests over volume.
+
+```{r}
+ser_reqs_out <- ser_reqs_ar %>%
+  
+  #grouping by borough x year for outcome calc
+  group_by(borough, year) %>%
+  
+  #calculating outcomes
+  summarise(
+    
+    #summing the volume of service requests
+    volume = n(),
+    
+    #summing the # of closed reqs
+    closed = sum(status == "Closed", na.rm = TRUE),
+    
+    #calculating resolution rate based on # of closed reqs & volume 
+    resolution_rate = closed / volume,
+    
+    #calculating mean response time based on days to close
+    mean_response = mean(days_to_close, na.rm = TRUE),
+    
+    #dropping groups, not necessary, but cleaner for handling later
+    .groups = "drop")
+```
+
+Checking the first few rows shows that the calculations were performed.
+
+```{r}
+#checking first few rows
+head(ser_reqs_out)
+```
+
+Saving output data to a CSV file.
+
+```{r}
+#save to CSV file in project folder path for processed datasets
+write.csv(ser_reqs_out, "data/processed/ser_reqs_out.csv")
+```
+
+### NYC Expense Budgets
+
+#### [**Source**](https://data.cityofnewyork.us/City-Government/Expense-Budget-Funding-All-Source/39g5-gbp3/about_data)
+
+This data was sourced from the NYC Open Data as provided by the Mayor's Office of Management & Budget (OMB). The full data available for extraction encompasses expense agency data by unit of appropriation for the Adopted, Financial Plan and Modified conditions by funding source for agencies across NYC, from FY17 to FY26, last updated July 8, 2025. This data is updated three times per year after publication of the Preliminary, Executive and Adopted Budget, usually in January, April and June respectively.
+
+This data was extracted using the NYC Open Data "Query function". When reading in, columns selected were `Publication Date`, `Fiscal Year`, `Agency Name`, `Total Adopted Budget Amount`, `Unit Appropriation Name`.
+
+Explore the [data dictionary](https://data.cityofnewyork.us/api/views/39g5-gbp3/files/def52463-e0e7-4215-b61f-b66c3f663509?download=true&filename=Expense_Budget_Funding%20-%20All_Source_Data_Dictionary.xlsx) to learn more.
+
+```{r}
+#reading in the budgets data
+budgets <- read_csv("data/raw/nyc_agency_budgets.csv",
+                    col_select = c("Publication Date",
+                                   "Fiscal Year",
+                                   "Agency Name",
+                                   "Unit Appropriation Name",
+                                   "Total Adopted Budget Amount"))
+```
+
+#### Data Cleaning
+
+Checking the structure highlights the need to standardize column names.
+
+```{r}
+#checking structure of data
+str(budgets)
+```
+
+Checking missing values shows no missing values are present in this data.
+
+```{r}
+#checking for missing values
+colSums(is.na(budgets))
+```
+
+Given that these budgets are published in three cycles (preliminary, executive, adopted), the latest `Publication Date`per `Fiscal Year` per `Agency Name` ought to be extracted.
+
+A peek into the `Publication Date` shows there is no standard `Publication Date` for the adopted budget for the June cycle, which is the last `Publication Date` per `Fiscal Year` per `Agency Name.`
+
+```{r}
+#filtering for a subset of data to peek 
+budgets %>%
+  
+  #filtering for one year
+  filter(`Fiscal Year` == 2024) %>%
+  
+  #arranging by publication date
+  arrange(desc(`Publication Date`))
+```
+
+```{r}
+#filtering for a subset of data to peek 
+budgets %>%
+  
+  #filtering for one year
+  filter(`Fiscal Year` == 2023) %>%
+  
+  #arranging by publication date
+  arrange(desc(`Publication Date`))
+```
+
+This means that the best way to select is to filter for max `Publication Date` per `Fiscal Year` per `Agency Name.`
+
+```{r}
+#filtering for a subset of data to peek 
+budgets %>%
+  
+  #grouping by fiscal year x agency name
+  group_by(`Fiscal Year`, `Agency Name`) %>%
+  
+  #filter for max publication dates and one year to peek
+  filter(`Publication Date` == max(`Publication Date`, na.rm = TRUE, 
+                                   `Fiscal Year`= 2024)) 
+```
+
+Leveraging the insights from about the NYC Agency budget can be cleaned.
+
+```{r}
+#cleaning budgets and summarizing total adopted budgets agency x year
+budgets_sum <- budgets %>%
+    
+  #standardizing column names
+  clean_names() %>%
+    
+  #grouping
+  group_by(agency_name, fiscal_year) %>%
+    
+  #filtering for the max pub date per fiscal year x agency
+  filter(publication_date == max(publication_date, na.rm = TRUE)) %>%
+    
+  #summing budget lines per agency and fiscal year
+  summarise(budget = sum(total_adopted_budget_amount,
+                         na.rm = TRUE), .groups = "drop")
+```
+
+Checking the first few rows shows calculations have been performed correctly.
+
+```{r}
+#checking the first few rows
+head(budgets_sum)
+```
+
+Cross checking with City Council Budget Reports to ensure the proper budgets were pulled for the fiscal year. This confirmed that it was successful.
+
+```{r}
+budgets_sum %>%
+  
+  #filtering for one agency to test
+  filter(agency_name == "HOUSING PRESERVATION AND DEVELOPMENT")
+```
+
+Saving to CSV file.
+
+```{r}
+#saving to csv
+write.csv(budgets_sum ,"data/processed/budgets_sum.csv")
+```
+
+To align the budget data to the 311 and ACS5 data, the budgets were converted from fiscal year to calendar year.
+
+```{r}
+budgets_conv <- budgets_sum %>%
+  
+#grouping by agency 
+  group_by(agency_name) %>%
+    
+  #arranging is necessary for lag (in what order to compare fiscal years)
+  arrange(fiscal_year, .by_group = TRUE) %>%
+    
+  #fiscal year to cal year conversion
+  #used lag from dplyr for easier calcution 
+  mutate(
+    
+    #takes half of the current years budget
+    half_current = budget / 2,
+    
+    #takes half of the previous year budget 
+    half_prev    = lag(budget, default = 0) / 2,
+    
+    #adding half the current year and half the prev year budget
+    budget = half_current + half_prev,
+    
+    #renaming fiscal year as year 
+    year = fiscal_year) %>%
+  
+  #ungrouping for better handling
+  ungroup() %>%
+  
+  #selecting only the necessary columns
+  select(agency_name, year, budget) %>%
+  
+  #filtering only for necessary years
+  filter(year %in% c(2019:2024))
+```
+
+Check final unique values of `agency_names` for mapping with 311 service requests.
+
+```{r}
+#checking the distinct values of agency names
+unique(budgets_conv$agency_name)
+```
+
+To support with selecting only budgets that are aligned with agencies that are in the 311 data, an agency map was created.
+
+```{r}
+#agency map to help with joining service requests with budgets
+agency_map <- tribble(
+  ~agency_abbr, ~agency_name,
+  "DOHMH", "DEPARTMENT OF HEALTH AND MENTAL HYGIENE",
+  "HPD",   "HOUSING PRESERVATION AND DEVELOPMENT",
+  "NYPD",  "POLICE DEPARTMENT",
+  "TLC",   "NYC TAXI AND LIMOUSINE COMM",
+  "DOT",   "DEPARTMENT OF TRANSPORTATION",
+  "DEP",   "DEPARTMENT OF ENVIRONMENTAL PROTECT.",
+  "DSNY",  "DEPARTMENT OF SANITATION",
+  "DOB",   "DEPARTMENT OF BUILDINGS",
+  "DPR",   "DEPARTMENT OF PARKS AND RECREATION",
+  "DHS",   "DEPARTMENT OF HOMELESS SERVICES",
+  "DOF",   "DEPARTMENT OF FINANCE",
+  "DCWP",  "DEPT OF CONSUMER & WORKER PROTECTION",
+  "DFTA",  "DEPARTMENT FOR THE AGING",
+  "DOITT", "DEPARTMENT OF INFO TECH & TELECOMM",
+  "DOE",   "DEPARTMENT OF EDUCATION")
+
+```
+
+Testing to see if the filtering with an agency map works. It works as 15 agencies are retained, coinciding with the number of agencies in the 311 service requests summary.
+
+```{r}
+budgets_filt <- budgets_conv %>%
+  
+  #filtering for budget agencies in the agency map 
+  filter(agency_name %in% agency_map$agency_name) 
+
+unique(budgets_filt$agency_name)
+```
+
+```{r}
+length(unique(budgets_filt$agency_name))
+```
+
+Final summarizing of budget x year can be accomplished by filtering for the agency names in the agency map.
+
+```{r}
+budgets_agg <- budgets_conv %>%
+  
+  #filtering for budget agencies in the agency map 
+  filter(agency_name %in% agency_map$agency_name) %>%
+  
+  #grouping by year
+  group_by(year) %>%
+  
+  #summing budgets
+  summarise(budget = sum(budget),   
+            .groups = "drop") 
+```
+
+Checking final structure.
+
+```{r}
+#check structure
+str(budgets_agg)
+```
+
+```{r}
+#see first few rows
+head(budgets_agg)
+```
+
+Saving to CSV file for reference.
+
+```{r}
+#save to CSV file in project folder path for processed datasets
+write.csv(budgets_agg, "data/processed/budgets_agg.csv")
+```
+
+### ACS Socioeconomic Indicators
+
+#### [**Source**](https://www.rdocumentation.org/packages/tidycensus/versions/1.7.3)
+
+This dataset was sourced from the R package `tidycensus` which wraps around the Census API. Specifically, data obtained from the American Community Survey (5-year 2023 release) for NYC boroughs (Bronx, Queens, Manhattan, Brooklyn, and Staten Island).
+
+To explore the variables available per ACS survey type, the `load_variables` function can be leveraged.
+
+```{r}
+#viewing the specific variables in AC5 
+view(load_variables(2023, "acs5", cache = TRUE))
+```
+
+| SES Indicator | ACS5 Code  |
+|---------------|------------|
+| Total Pop     | B01003_001 |
+| Median Income | B19013_001 |
+| Poverty       | B17001_002 |
+| Unemployment  | B23025_005 |
+
+```{r}
+#setting variables
+
+#defining the geography to be counties for borough selection
+geography <- "county"
+
+#setting the state as the NYS code
+state <- 36
+
+#selecting the necessary counties
+county <- c("Bronx", "Kings", "Richmond", "Queens", "New York")
+
+
+#defining the SES indicators as noted above
+variables <- c(
+  total_pop      = "B01003_001",
+  median_income  = "B19013_001",
+  poverty        = "B17010_002",
+  unemployment   = "B23025_005")
+```
+
+Fetching primary ACS data (ACS5) which will be used for LM and GAM (smoothing) models.
+
+```{r}
+#getting AC5 data while passing the predefined args above
+acs5 <- get_acs(
+  geography = geography,
+  variables = variables,
+  state = state,
+  county = county,
+  year = 2023,
+  survey = "acs5",
+  geometry = FALSE)  
+```
+
+#### Data Cleaning
+
+Checking structure. Columns are not standardized and clean. Borough names include county suffix and state name which will need to be cleaned to match the 311 service requests data.
+
+```{r}
+#checking structure
+str(acs5)
+```
+
+Checking the first few rows. The format of the dataset is not appropriate for merging with 311 service requests and NYC Agency budgets. This will need to be pivoted wide for proper merging later.
+
+```{r}
+#checking first few rows
+head(acs5)
+```
+
+Cleaning the ACS5 datasets based on insights above.
+
+```{r}
+acs_cl <- acs5 %>%
+  
+  #pivoting wider for proper merging later
+  #the variable names become columns
+  #values from the estimate and moe to be the row values of the variable names
+  pivot_wider(names_from = variable,
+              values_from = c(estimate, moe)) %>%
+  
+  #renaming the borough names
+  mutate(
+    borough = case_when(
+      NAME == "Bronx County, New York"    ~ "BRONX",
+      NAME == "Kings County, New York"    ~ "BROOKLYN",
+      NAME == "New York County, New York" ~ "MANHATTAN",
+      NAME == "Queens County, New York"   ~ "QUEENS",
+      NAME == "Richmond County, New York" ~ "STATEN ISLAND")) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #standardizing the column names
+  clean_names() %>%
+  
+  #removing unnecessary columns
+  select(-geoid, -name)
+
+
+```
+
+Rechecking structure to ensure cleaning was successful.
+
+```{r}
+#checking the structure
+str(acs_cl)
+```
+
+Saving to CSV file.
+
+```{r}
+#save to csv
+write_csv(acs_cl, "data/processed/acs_cl.csv")
+```
+
+### Merging Datasets
+
+Combined 311 outcome data with borough-level SES indicators borough x year and then joined budgets to years. ​
+
+```{r}
+#reading in the service requests outcome
+ser_reqs <- read.csv("data/processed/ser_reqs_out.csv")
+
+#reading the agg budgets
+agency_budgets <- read.csv("data/processed/budgets_agg.csv")
+
+#reading the acs5 data
+acs5_data <- read.csv("data/processed/acs_cl.csv")
+```
+
+```{r}
+merged_datasets <- ser_reqs %>%
+  
+  #using left join to merge the acs5 dataset first by borough
+  #this will map the acs5 to all years x borough 
+  left_join(acs5_data, by = c("borough")) %>%
+  
+  #using left join to merge with budgets by year
+  #this will map the yearly budgets to all boroughs based on the year
+  left_join(agency_budgets, by = "year")
+```
+
+```{r}
+#checking the first few rows
+head(merged_datasets)
+```
+
+```{r}
+#writing to csv
+write_csv(merged_datasets, "data/processed/merged_datasets.csv")
+```
+
+## Exploratory Data Analysis (EDA)
+
+**Correlations:** Visualizing the correlations between SES indicators and budgets with 311 service requests outcomes
+
+```{r}
+#reading in my saved file of final merged datasets 
+merged_df <- read.csv("data/processed/merged_datasets.csv")
+```
+
+### Correlation Heatmap
+
+Plotting the correlations in a heatmap for ease of visually reading.
+
+```{r}
+#define a variable to hold the columns to pass for correlation
+corr_df <- merged_df %>%
+  
+  #select the columns 
+  select(volume, mean_response, resolution_rate,
+         budget, starts_with("estimate_"))  
+
+#define a variable to hold the correlations 
+corr_mat <- cor(corr_df, use = "pairwise.complete.obs")
+
+```
+
+```{r}
+#plot the correlations interactively with plot_ly
+#setting x as the column names (the variables)
+plot_ly(x = colnames(corr_mat), 
+        
+        #setting y as the column names (the variables)
+        y = rownames(corr_mat),
+        
+        #setting z correlations calculated
+        z = corr_mat, 
+        
+        #setting plot type as heatmap
+        type = "heatmap", 
+        
+        #setting the color scheme
+        colorscale = "RdYlBu")
+```
+
+Based on the correlation matrix:
+
+| Predictor     | Volume | Response Time | Resolution Rate |
+|---------------|--------|---------------|-----------------|
+| Population    | +0.93  | +0.05         | +0.08           |
+| Median Income | -0.37  | +0.37         | -0.33           |
+| Poverty       | +0.88  | -0.14         | +0.36           |
+| Unemployment  | +0.96  | -0.37         | +0.24           |
+| Budgets       | +0.19  | +0.37         | -0.34           |
+
+### Trends
+
+```{r}
+#creating a function to generate trend plots for the three outcomes
+plot_outcome <- function(df, outcome, title, ylab) {
+  
+  #setting args to pass (df, outcome)
+  #x defined as year 
+  #color defined based on borough (will show diff colors for each)
+  ggplotly(ggplot(df, aes(x = year, 
+                          y = .data[[outcome]], 
+                          color = borough)) +
+             
+             #plot line chart
+             geom_line() + 
+             
+             #setting the args to pass 
+             #default arg for year
+             labs(title = title, x = "Year", y = ylab) +
+             
+             #setting theme as minimal 
+             theme_minimal())}
+```
+
+#### Volume
+
+```{r}
+#calling the function
+#passing the merged dataset as the df
+#passing the outcome as volume
+plot_outcome(merged_df, "volume",
+             
+             #setting the title 
+             title = "311 Volume by Borough",
+             
+             #setting the ylab (axis title)
+             ylab  = "Volume")
+```
+
+Trends in volume per borough show that Brooklyn has consistently had the highest volume of 311 service requests, while Staten Island has had the least. Bronx, Queens, and Manhattan have similar volume throughout the years. Uniformly, there was an increase in volume after 2020, which coincided with COVID-19.
+
+#### Response Time
+
+```{r}
+#calling the function
+#passing the merged dataset as the df
+#passing the outcome as mean response
+plot_outcome(merged_df, "mean_response",
+             
+             #setting the title 
+             title = "Response Times by Borough",
+             
+             #setting the ylab (axis title)
+             ylab  = "Days")
+```
+
+Trends in response times per borough show that Manhattan has higher response times throughout the years, while Staten Island has had lower response times throughout the years. Bronx, Brooklyn, and Queens have had similar response times throughout the years. Uniformly, there was an increase in response times after 2020, which coincided with COVID-19.
+
+#### Resolution Rate
+
+```{r}
+#calling the function
+#passing the merged dataset as the df
+#passing the outcome as resolution rate
+plot_outcome(merged_df, "resolution_rate",
+             
+             #setting the title 
+             title = "Resolution Rate by Borough",
+             
+             #setting the ylab (axis title)
+             ylab  = "Rate")
+```
+
+Trends in resolution rates show that resolution rates have been similar throughout the boroughs up until 2021. Uniformly, resolution rates have decreased since 2020, which coincided with COVID-19.
+
+## Models
+
+Tested the effects of budgets and borough-level SES indicators (ACS5) on predicting 311 outcomes (LM + GAM)​
+
+Defining the arguments to be passed to the LM and GAM model functions.
+
+```{r}
+#defining variable to hold budget as a string to pass
+budget <- "budget"
+
+#defining variable to hold volume as a string to pass
+volume <- "volume"
+
+#defining variable to hold mean_response as a string to pass
+mean_response <- "mean_response"
+
+#defining variable to hold resolution_rate as a string to pass
+resolution_rate <- "resolution_rate"
+
+#defining a vector of strings to hold SES vars to pass 
+vars <- c(
+  "estimate_total_pop", "estimate_poverty",
+  "estimate_median_income", "estimate_unemployment")
+```
+
+Creating function to calculate RMSE per model. The RMSE is used to evaluate the models predictive accuracy.
+
+```{r}
+#defining rmse function
+#arg to pass is the model once performed
+model_rmse <- function(model) {
+  
+  #extracting the residuals from model
+  #squaring each residual
+  #averaging the squared residuals
+  #taking the square root of the mean of squared residuals
+  sqrt(mean(model$residuals^2, 
+            
+            #ignoring any missing values
+            na.rm = TRUE))}
+```
+
+### Linear Models
+
+```{r}
+#defining a function to run the subsequent models
+#args to pass are: 
+#the outcome (predefined above)
+#ses_vars  (predefined above)
+#budget  (predefined above)
+#the dataset 
+run_lm_model <- function(outcome, vars, budget, df) {
+  
+  #combining args passed into formula string
+  formula_str <- paste(outcome, "~",
+                       paste(c(vars, budget), collapse = " + "))
+  
+  #converting the string into a formula to pass
+  #setting data to the df passed
+  lm(as.formula(formula_str), data = df)}
+```
+
+#### Volume
+
+```{r}
+#running model and storing in variable
+#passing predefined args
+lm_volume <- run_lm_model(outcome = volume, 
+                          vars = vars, 
+                          budget = budget,
+                          df = merged_df)
+
+#checking model summary
+summary(lm_volume)
+
+#getting rmse
+model_rmse(lm_volume)
+```
+
+###### Model Summary
+
+The linear model (volume \~ SES + budget) explains 97.1% of the variance in volume in NYC boroughs between 2019-2024. The model is statistically significant overall (F-test p \< 0.001), indicative that the predictors in the model do explain collectively the variations in volume.
+
+The linear model under-predicted volume by 118953 service requests and over-predicted by 97035 service requests. On average, the linear model is about 44734 (RMSE) service requests from the true total volume.
+
+-   **Total Population (Negative, Not Statistically Significant p \<0.78)**
+
+    -   For every one-unit increase in total population, holding all other predictors constant, the model predicts an decreases by \~1.792e-02 service requests in volume.
+
+-   **Poverty (Positive, Marginally Statistically Significant​ p = 0.06)**
+
+    -   For every one-unit increase in poverty, holding all other predictors constant, the model predicts an increases by \~2.356e+00 service requests in volume.
+
+-   **Median Income (Positive, Not Statistically Significant p = 0.16)**
+
+    -   For every one-unit increase in median income, holding all other predictors constant, the model predicts an increases by \~ 1.496e+00 service requests in volume.
+
+-   **Unemployment (​Positive, Highly Statistically Significant​ p \<0.001)**
+
+    -   For every one-unit increase in unemployment, holding all other predictors constant, the model predicts a increases by \~ 7.404e+00 service requests in volume.
+
+-   **Budget (Positive, Highly Statistically Significant p \<0.001)**
+
+    -   For every one-unit increase in budget, holding all other predictors constant, the model predicts an increases by \~ 1.431e-05 service requests in volume.
+
+#### Response Time
+
+```{r}
+#running model and storing in variable
+#passing predefined args
+lm_response_time <- run_lm_model(outcome = mean_response,
+                                 vars = vars, 
+                                 budget = budget,
+                                 df = merged_df)
+
+
+#checking model summary
+summary(lm_response_time)
+
+#getting rmse
+model_rmse(lm_response_time)
+```
+
+###### Model Summary
+
+The linear model (response_time \~ SES + budget) explains 30.1% of the variance in average response times in NYC boroughs between 2019-2024. The model is not statistically significant overall (F-test p = 0.105), indicative that the predictors in the model do not collectively explain the variations in response time.
+
+The linear model under-predicted response times by 3.4 days and over-predicted by 2.2 days. On average, the linear model is about 1.4 days from the true response time (RMSE).
+
+-   **Total Population (Positive, Not Statistically Significant p = 0.84)**
+
+    -   For every one-unit increase in total population, holding all other predictors constant, the model predicts response times increases by \~ 4.114e-07 days.
+
+-   **Poverty (Positive, Not Statistically Significant p =0.53​)**
+
+    -   For every one-unit increase in poverty, holding all other predictors constant, the model predicts response times increases by \~ 2.461e-05 days.
+
+-   **Median Income (Positive, Not Statistically Significant p = 0.16)**
+
+    -   For every one-unit increase in median income, holding all other predictors constant,the model predicts average times increases by \~ 4.783e-05 days.
+
+-   **Unemployment (​Negative, Not Statistically Significant​ p =0.73)**
+
+    -   For every one-unit increase in unemployment, holding all other predictors constant, the model predicts response times decreases by \~2.021e-05 days.
+
+-   **Budget (Positive, Statistically Significant p \<0.05)**
+
+    -   For every one-unit increase in budget, holding all other predictors constant,the model predicts response times increases by \~ 1.818e-10 days.
+
+#### Resolution Rate
+
+```{r}
+#running model and storing in variable
+#passing predefined args
+lm_resolution_rate <- run_lm_model(outcome = resolution_rate,
+                                   vars = vars,
+                                   budget = budget,
+                                   df = merged_df)
+
+#checking model summary
+summary(lm_resolution_rate)
+
+#getting rmse
+model_rmse(lm_resolution_rate)
+```
+
+###### Model Summary
+
+The linear model (resolution_rate \~ SES + budget) explains 57.8% of the variance in average response times in NYC boroughs between 2019-2024. The model is statistically significant overall (F-test p \< 0.001), indicative that the predictors in the model do collectively explain the variations in resolution rates.
+
+The linear model under-predicted resolution rates by \~ 1.269e-03 and over-predicted by \~ 1.014e-03. On average, the linear model is about 0.0005 (RMSE) from the true resolution rate.
+
+-   **Total Population (Negative, Highly Statistically Significant p \<0.001)**
+
+    -   For every one-unit increase in total population, holding all other predictors constant, the model predicts resolution rates decreases by \~ -2.812e-09.
+
+-   **Poverty (Positive, Marginally Statistically Significant p = 0.09​)**
+
+    -   For every one-unit increase in poverty, holding all other predictors constant, the model predicts resolution rates increases by \~2.337e-08.
+
+-   **Median Income (Positive, Statistically Significant p \<0.05)**
+
+    -   For every one-unit increase in median income, holding all other predictors constant, the model predicts resolution rates increases by \~2.638e-08.
+
+-   **Unemployment (​Positive, Very Statistically Significant p \<0.01​)**
+
+    -   For every one-unit increase in unemployment, holding all other predictors constant, the model predicts resolution rates increases by \~6.202e-08.
+
+-   **Budget (Negative, Statistically Significant p \<0.05)**
+
+    -   For every one-unit increase in budget, holding all other predictors constant, the model predicts resolution rates decreases by \~7.387e-14.
+
+### GAM
+
+```{r}
+#creating function to run GAM model
+#taking in args for outcome, ses vars, budget, and df
+#these are predefined above
+run_gam_model <- function(outcome, vars, budget, df) {
+  
+  #building smooth terms for SES + budget
+  smooth_terms <- paste0("s(", c(vars, budget), ", k = 4)")
+  
+  #combining args passed into formula string
+  formula_str <- paste0(outcome, " ~ ",
+                        paste(smooth_terms, collapse = " + "))
+  
+  #converting the string into a formula to pass
+  #setting data to the df passed
+  gam(as.formula(formula_str), data = df)}
+```
+
+#### Volume
+
+```{r}
+#running model and storing in variable
+#passing predefined args
+gam_volume <- run_gam_model(outcome = volume,
+                            vars = vars,
+                            budget = budget,
+                            df = merged_df)
+
+#checking model summary
+summary(gam_volume)
+
+#getting rmse
+model_rmse(gam_volume)
+```
+
+###### Model Summary
+
+The GAM model (volume \~ s(SES) + s(budget)) explains 97.4% of the variance in volume in NYC boroughs between 2019-2024. On average, the GAM model is about 42138 (RMSE) service requests from the true total volume.
+
+-   **Total Population (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.939).
+
+-   **Poverty (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.420).
+
+-   **Median Income (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.276).
+
+-   **Unemployment (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and weakly statistically significant (p = 0.340).
+
+-   **Budget (Highly Statistically Significant, Nonlinear Effects)**
+
+    -   Estimated effect is nonlinear (edf \~ 2.047), and highly statistically significant (p \< 0.001).
+
+#### Response Time
+
+```{r}
+#running model and storing in variable
+#passing predefined args
+gam_mean_response <- run_gam_model(outcome = mean_response,
+                                   vars = vars,
+                                   budget = budget,
+                                   df = merged_df)
+
+#checking model summary
+summary(gam_mean_response)
+
+#getting rmse
+model_rmse(gam_mean_response)
+```
+
+###### Model Summary
+
+The GAM model (response_time\~ s(SES) + s(budget)) explains 44.2% of the variance in response time in NYC boroughs between 2019-2024. On average, the GAM model is about 1.3 days (RMSE) from the true average response time.
+
+-   **Total Population (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.979).
+
+-   **Poverty (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.935).
+
+-   **Median Income (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.624).
+
+-   **Unemployment (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.973).
+
+-   **Budget (Statistically Significant, Nonlinear Effects)**
+
+    -   Estimated effect is nonlinear (edf \~ 2.225), and highly statistically significant (p \< 0.05).
+
+#### Resolution Rate
+
+```{r}
+#running model and storing in variable
+#passing predefined args
+gam_resolution_rate <- run_gam_model(outcome = resolution_rate,
+                                     vars = vars,
+                                     budget = budget,
+                                     df = merged_df)
+
+
+#checking model summary
+summary(gam_resolution_rate)
+
+#getting rmse
+model_rmse(gam_resolution_rate)
+```
+
+###### Model Summary
+
+The GAM model (volume \~ s(SES) + s(budget)) explains 58.3% of the variance in resolution rates in NYC boroughs between 2019-2024. On average, the GAM model is about 0.005 (RMSE percentage points from the resolution rates.
+
+-   **Total Population (Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and is statistically significant (p \< 0.05)
+
+-   **Poverty (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.212).
+
+-   **Median Income (Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and is statistically significant (p \< 0.05)
+
+-   **Unemployment (Not Statistically Significant, No Nonlinear Effects)**
+
+    -   Estimated effect is not nonlinear (edf \~ 1), and not statistically significant (p = 0.104).
+
+-   **Budget (Statistically Significant, Slight Nonlinear Effects)**
+
+    -   Estimated effect is slightly nonlinear (edf \~ 1.15), and is statistically significant (p \< 0.05).
+
+### Overall Findings
+
+-   **Volume**
+
+    -   Budgets have positive highly statistically significant linear and nonlinear effects on volume. Given that adopted agency budgets are informed by previous year performance, this could signal that increased demand in previous years drive the need for increases in funding.
+
+    -   Unemployment has positive highly statistically significant linear effects on volume. This could be due to periods of economic hardship, suggesting that as economic strain rises, so does the demand for reporting public service issues.
+
+-   **Response Time**
+
+    -   Budgets have positive statistically significant linear and statistically significant nonlinear effects on response times. Given that budgets are also statistically significant with volume, potentially in response to previous year performance, workloads potentially have increased as well, signalling an increase in response times (more workload means less capacity).
+
+-   **Resolution Rate**
+
+    -   Budgets have negative statistically significant linear effects on resolution rates. This could be that although budgets are increasing, there may be allocation issues corresponding to the ability to resolve service requests.
+
+    -   Unemployment has positive very statistically significant linear effects on resolution rates. This could be due to the capacity of individuals who file service complaints to engage with the process of resolving their service requests.
+
+    -   Median income has positive statistically significant linear effects on resolution rates. This could be due to individuals who are more affluent having higher political and social capital leading to higher expectations of service delivery.
+
+    -   Total population has negative very statistically significant linear effects on resolution rates. This could be due to the growth of demand in service requests outpacing the capacity to address them.
+
+## Data Quality & Limitations
+
+### 311 Service Requests
+
+-   **Recording Accuracy**: In terms of the recording accuracy of this dataset, it has standardized fields for date/time, location, service category, resolution status, agency, etc.
+
+-   **Conceptual Suitability:** In terms of conceptual suitability, this dataset is overall fit and relevant to the overarching question and specific questions in providing the information needed to determine 311 service request volume, response times, and resolution rates.
+
+-   **Sampling Accuracy**: In terms of the sampling accuracy of this dataset, it represents the population of residents who 1) are willing to submit service requests, 2) have knowledge of how to submit service requests, and 3) have access to phone/mobile/internet to submit service requests. This introduces a sampling bias whereby residents with greater access and awareness of 311 are represented in the dataset. Furthermore, seasonal factors as inclement weather can lead to spikes in service request volume which introduces a sampling bias whereby the magnitude of service requests would be impacted by external factors.
+
+-   **Limitations:** Missing values in this dataset were not predefined as NANs and therefore a deeper dive at missing values needed to be conducted. This identified the need to remove rows with “Unspecified” and "NA" boroughs. Some service requests had less than 0 or greater than 365 days response time, which would inflate analysis and modeling. Rows with these two types of issues with response times were removed.
+
+### Budget Data
+
+-   **Recording Accuracy**: In terms of the recording accuracy of this dataset, it is high due to the legal mandates tied to financial processes and reporting. Financial budgets for each agency is reported yearly as preliminary budget, executive budget, and adopted budget. The former two, preliminary and executive budgets, are proposals that are not finalized contingent on state and federal allocations as well as council negotiations. The latter, adopted budget, reflects the finalized budget amount after state and federal allocations have been determined and negotiations are final.
+
+-   **Sampling Accuracy**: In terms of the sampling accuracy of this dataset, no sampling bias is of concern as budgets are not sampled but rather determined through financial processes. 
+
+-   **Conceptual Suitability:** In terms of conceptual suitability, this dataset is overall fit and relevant to the overarching question and specific question in providing the information needed for yearly city-wide agency-specific budgets. 
+
+-   **Limitations:** The expense budgets for NYC run on a fiscal year (July 1 - June 30) which does not coincide with the calendar year. Therefore, a transformation of the budgets was performed, whereby fiscal years were split in two and the total for a year was the summation of half the previous year and half the current year's budgets.
+
+### ACS Socioeconomic Indicators 
+
+-   **ACS5**: These indicators were released in 2023 and represent the 5-year average between 2019-2023 and were used as the proxy estimates for borough-level estimates for 2019-2024.
+
+-   **Conceptual Suitability:** In terms of conceptual suitability, this dataset is overall fit and relevant to the overarching question and specific question in providing the information needed to for socio-economic indicators 
+
+-   **Recording Accuracy**: In terms of the recording accuracy of this dataset, it is conducted yearly by the U.S. Census Bureau and disseminated by the NYC Department of Planning. Data is collected via mail, online, and Computer Assisted Interviewing (CAPI). This multimodal approach to data collection increases recording accuracy but does introduce recording risks such as interviewer error, mistakes with data entry, and misunderstanding from interviewee, leading to nonsampling errors. 
+
+-   **Sampling Accuracy**: In terms of the sampling accuracy of this dataset, in conducting this survey, the Census draws from the Master Address File to ensure representation. Annual sample size target is 3.5 million housing units, whereby sampling rates are stratified by geography. Margin of errors are reported with a 90% confidence interval ([U.S. Census Bureau (2022)](https://www2.census.gov/programs-surveys/acs/tech_docs/accuracy/ACS_Accuracy_of_Data_2022.pdf). 
+
+-   **Limitations**: A limitation with ACS5 data is that given its average across time, it does not provide year-to-year insights, meaning that annual variation is not as explicit and cannot be determined. Another limitation is the imputation of the estimates for 2024 was based on the 5-year average between 2019-2024, albeit using the statistical method of last observation carried forward (LOCF).
+
+## Dashboard
+
+The dashboard developed was hosted using shinyapps.io and can be found [here](https://z6z0v1-astrid-barreras.shinyapps.io/ServiceRequestsDashboard/#section-overarching-question). At the moment it has a run time of 8hrs, and will be refreshed at 8am and 6pm everyday.
+
+### Flexdashboard Code
+
+![](images/clipboard-1445931148.png)
+
+![](images/clipboard-2343215870.png)
+
+![](images/clipboard-2696890865.png)
+
+![](images/clipboard-2114548370.png)
+
+![](images/clipboard-454489295.png)
+
+![](images/clipboard-3518758500.png)
+
+![](images/clipboard-2320421747.png)
+
+![](images/clipboard-2213490820.png)
+
+![](images/clipboard-3250151767.png)
+
+## README
+
+To run this qmd successfully,
+
+1.  Create a root folder and store this qmd file in the root folder.
+2.  Create a /data folder in root folder.
+3.  Create /raw folder in /data folder. Add the datasets from the submission file here (/data/raw).
+    -   The 311 Service Requests and Agency Budgets files have been shared in the submission of the assignment as truncated versions with only the necessary columns needed for file size management.
+4.  Create a /processed folder in /data folder to store processed data.
+5.  Run qmd file with CTRL + ALT + R to have the entire markdown file process or individually run each code chunk.
+
+## References
+
+1.  [**Quarto Documentation**](https://quarto.org/docs/reference/formats/opml.html): Leveraged this reference to identify OMPL (Outline Processor Markup Language).
+
+2.  [**flexdashboard Documentation**](https://rstudio.github.io/flexdashboard/articles/using.html) and [**shiny Documentation**](https://rstudio.github.io/flexdashboard/articles/shiny.html)**:** Leveraged these references to learn to how to develop a flexdashboard.
+
+3.  [**shinyapps.io Documentation**](https://docs.posit.co/shinyapps.io/guide/index.html): Leveraged this reference to learn how to publish a flexdashboard.
+
+4.  [**American Community Survey (5-year)**](https://walker-data.com/tidycensus/): Leveraged this reference to learn how to use tidycensus.
+
+5.  [***Analyzing US Census Data: Methods, Maps, and Models in R***](https://walker-data.com/census-r/): Leveraged this reference as a comprehensive documentation supplementing R documentation on tidycensus.
+
+6.  [**Linear Regression In R**](https://www.codecademy.com/learn/learn-linear-regression-in-r/modules/linear-regression-in-r/cheatsheet): Cheatsheet was leveraged as a reference for linear modeling.
+
+7.  [**GAM Application Using R**](https://m-clark.github.io/generalized-additive-models/application.html): Leveraged this reference for GAM modeling.
