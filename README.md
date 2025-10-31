@@ -8,7 +8,7 @@
 
 ##  Project Overview
 
-This project analyzes over **18.6 million** NYC 311 service requests (2019–2024) to understand how **volume**, **response times**, and **resolution rates** vary across boroughs—and how these variations are influenced by **socioeconomic factors** and **budget allocations**.
+This project analyzes over **18.6 million** NYC 311 service requests (2019–2024) to understand how **volume**, **response times**, and **resolution rates** vary across boroughs, and how these variations are influenced by **socioeconomic factors** and **budget allocations**.
 
 The analysis integrates three major data sources:
 - **NYC Open Data – 311 Service Requests**
@@ -31,15 +31,11 @@ Key methods include:
 | `Individual Project Report.qmd` | Quarto technical report. Full data processing, modeling, and visualization workflow. |
 | `service_requests.pdf` | Rendered report version for easy reading. |
 | `SQ4Dashboard.Rmd` | Shiny + Flexdashboard app for interactive borough and model exploration. |
-| `data/` | Contains raw and processed datasets (`/raw`). |
+| `data/` | Contains raw datasets (`/raw`). |
 
 ---
 
 ##  How to Run the Reports
-
-###  View Reports
-- **PDF report:** [`311_service_requests.pdf`](311_service_requests.pdf)  
-- **Quarto source:** [`311_service_requests.qmd`](311_service_requests.qmd)
 
 ###  Run Locally (RStudio)
 
