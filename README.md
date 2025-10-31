@@ -1,7 +1,7 @@
 #  NYC 311 Service Requests Analytics (2019–2024)
 
 **Author:** Astrid Barreras  
-**Stack:** R, tidycensus, dplyr, mgcv, ggplot2, plotly, flexdashboard, Shiny  
+**Tech Stack:** R, tidycensus, dplyr, mgcv, ggplot2, plotly, flexdashboard, Shiny  
 **Last Updated:** October 2025  
 
 ---
@@ -11,16 +11,16 @@
 This project analyzes over **18.6 million** NYC 311 service requests (2019–2024) to understand how **volume**, **response times**, and **resolution rates** vary across boroughs, and how these variations are influenced by **socioeconomic factors** and **budget allocations**.
 
 The analysis integrates three major data sources:
-- **NYC Open Data – 311 Service Requests**
-- **NYC Office of Management & Budget (OMB) Expense Budgets**
-- **U.S. Census Bureau – ACS 5-Year Estimates (tidycensus)**
+- NYC Open Data – 311 Service Requests
+- NYC Office of Management & Budget (OMB) Expense Budgets
+- U.S. Census Bureau – ACS 5-Year Estimates (tidycensus)
 
 Key methods include:
 - Large-scale data cleaning & preprocessing of 10GB+ raw 311 data
 - Borough-level aggregation of service outcomes (volume, mean response, resolution rate)
 - Integration of ACS socioeconomic variables and OMB budget data
 - Linear (LM) and Generalized Additive (GAM) modeling to estimate SES and budget effects
-- Interactive visualization via **R Shiny + Flexdashboard**
+- Interactive visualization via R Shiny + Flexdashboard
 
 ---
 
